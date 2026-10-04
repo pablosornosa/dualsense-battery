@@ -5,7 +5,8 @@ import sys
 import threading
 import tkinter as tk
 
-from . import install
+from . import config, install
+from .triggers import should_show
 from .popup import Popup, enable_dpi_awareness
 
 HELP = """DualSense Battery
@@ -36,15 +37,22 @@ def run_background(test=False):
     events = queue.Queue()
 
     if test:
-        events.put((70, "discharging"))
+        events.put(("test", 70, "discharging"))
         root.after(4500, root.destroy)
     else:
         threading.Thread(target=reader, args=(events,), daemon=True).start()
 
+    last = None
+
     def poll():
+        nonlocal last
         try:
             while True:
-                popup.show(*events.get_nowait())
+                kind, pct, state = events.get_nowait()
+                cfg = config.load()  # se relee: los cambios se aplican sin reiniciar
+                if kind == "test" or should_show(kind, pct, state, last, cfg):
+                    popup.show(pct, state, cfg)
+                last = (pct, state)
         except queue.Empty:
             pass
         root.after(50, poll)

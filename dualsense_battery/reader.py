@@ -27,16 +27,20 @@ def parse_report(data):
 
 
 def reader(events):
-    """Bucle del hilo lector: pone (pct, estado) en `events` al pulsar el boton PS."""
+    """Hilo lector: pone en `events` tuplas (tipo, pct, estado).
+
+    tipo: "connect" (primer informe tras conectar), "ps" (boton PS pulsado)
+          o "change" (cambio de porcentaje o de estado de carga).
+    """
     import hid  # import perezoso: el configurador no lo necesita
 
-    last_ps = False
     while True:
         info = next((d for p in PIDS for d in hid.enumerate(SONY_VID, p)), None)
         if not info:
             time.sleep(2)
             continue
         dev = hid.device()
+        last_ps, last = False, None
         try:
             dev.open_path(info["path"])
             dev.set_nonblocking(False)
@@ -51,8 +55,13 @@ def reader(events):
                 if not parsed:
                     continue
                 ps, pct, state = parsed
+                if last is None:
+                    events.put(("connect", pct, state))
+                elif (pct, state) != last:
+                    events.put(("change", pct, state))
+                last = (pct, state)
                 if ps and not last_ps:
-                    events.put((pct, state))
+                    events.put(("ps", pct, state))
                 last_ps = ps
         except Exception:
             pass  # mando desconectado o error: reintentar
@@ -61,5 +70,4 @@ def reader(events):
                 dev.close()
             except Exception:
                 pass
-        last_ps = False
         time.sleep(1)

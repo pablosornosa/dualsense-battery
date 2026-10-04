@@ -6,7 +6,7 @@ from ctypes import wintypes
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import config
+from . import config, monitors
 from .i18n import tr
 
 user32 = ctypes.windll.user32
@@ -67,16 +67,39 @@ def _font(names, px):
     return ImageFont.load_default()
 
 
-def _work_area():
-    r = wintypes.RECT()
-    user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)  # SPI_GETWORKAREA
-    return r.left, r.top, r.right, r.bottom
+THEME_COLORS = {
+    "dark": {"bg": "#141518", "fg": "#f5f5f7", "dim": "#8d9099", "track": "#2c2e34"},
+    "light": {"bg": "#f5f5f7", "fg": "#141518", "dim": "#6b6f78", "track": "#d8dbe0"},
+}
+STYLE_SIZE = {"ring": (144, 46), "bar": (176, 56), "battery": (150, 46), "minimal": (100, 38)}
+BOLT = [(1.5, -6), (-3.5, 1), (-0.5, 1), (-1.5, 6), (3.5, -1), (0.5, -1)]
+
+
+def resolve_theme(name):
+    if name == "system":
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            return "light" if winreg.QueryValueEx(key, "AppsUseLightTheme")[0] else "dark"
+        except OSError:
+            return "dark"
+    return name if name in THEME_COLORS else "dark"
+
+
+def accent_color(cfg, pct, state):
+    """Color del indicador: especial al cargar, fijo si se eligio, o segun el nivel."""
+    if state == "charging" and cfg["charging_color_on"]:
+        return cfg["charging_color"]
+    if cfg["color_mode"] == "accent":
+        return cfg["accent"]
+    return "#34c759" if pct > 30 else ("#ffd60a" if pct > 15 else "#ff453a")
 
 
 class Popup:
-    BG, FG, DIM, TRACK = "#141518", "#f5f5f7", "#8d9099", "#2c2e34"
-    W, H, MARGIN = 144, 46, 20  # tamano base en px a 96 dpi y escala 1.0
+    MARGIN = 20  # px a 96 dpi y escala 1.0
     FADE_STEP, FADE_MS = 0.12, 12
+    S = 4  # supersampling para antialiasing
 
     def __init__(self, root):
         self.root = root
@@ -87,35 +110,84 @@ class Popup:
         self.pos = (0, 0)
         self.size = (1, 1)
         self.gdi = None
-        self.dpi = root.winfo_fpixels("1i") / 96.0
 
     # ---------- dibujo ----------
-    def _render(self, w, h, k, pct, state, color, lang):
-        S = 4  # supersampling para antialiasing
-        img = Image.new("RGBA", (w * S, h * S), (0, 0, 0, 0))
+    def _bolt(self, dr, cx, cy, u, fill, halo=None):
+        if halo:  # contorno para que se vea sobre cualquier fondo
+            dr.polygon([(cx + x * u * 1.35, cy + y * u * 1.35) for x, y in BOLT], fill=halo)
+        dr.polygon([(cx + x * u, cy + y * u) for x, y in BOLT], fill=fill)
+
+    def _render(self, cfg, pct, state, k):
+        S, style = self.S, cfg["style"]
+        pal = THEME_COLORS[resolve_theme(cfg["theme"])]
+        color = accent_color(cfg, pct, state)
+        lang = config.resolve_language(cfg)
+        bw, bh = STYLE_SIZE[style]
+        w, h = round(bw * k), round(bh * k)
+        K = k * S  # 1 px base -> K px en el lienzo ampliado
+        W, H = w * S, h * S
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         dr = ImageDraw.Draw(img)
-        dr.rounded_rectangle((0, 0, w * S - 1, h * S - 1), radius=h * S // 2, fill=self.BG)
-        # anillo de progreso (PIL dibuja el trazo hacia dentro del recuadro)
-        d, lw = 24 * k * S, max(2, round(3 * k)) * S
-        x0, y0 = 12 * k * S, (h * S - d) / 2
-        box = (x0, y0, x0 + d, y0 + d)
-        dr.ellipse(box, outline=self.TRACK, width=int(lw))
-        cx, cy, r = x0 + d / 2, y0 + d / 2, d / 2 - lw / 2
-        if pct > 0:
-            end = -90 + 359.9 * min(pct, 100) / 100
-            dr.arc(box, start=-90, end=end, fill=color, width=int(lw))
-            for ang in (-90, end):  # extremos redondeados
-                px, py = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
-                dr.ellipse((px - lw / 2, py - lw / 2, px + lw / 2, py + lw / 2), fill=color)
-        if state == "charging":
-            u = k * S * 0.8
-            bolt = [(1.5, -6), (-3.5, 1), (-0.5, 1), (-1.5, 6), (3.5, -1), (0.5, -1)]
-            dr.polygon([(cx + x * u, cy + y * u) for x, y in bolt], fill=color)
-        semibold = _font(("seguisb.ttf", "segoeui.ttf"), round(19 * k * S))
-        regular = _font(("segoeui.ttf",), round(10.5 * k * S))
+        radius = 16 * K if style == "bar" else H // 2
+        dr.rounded_rectangle((0, 0, W - 1, H - 1), radius=radius, fill=pal["bg"])
+        semibold = _font(("seguisb.ttf", "segoeui.ttf"), round((17 if style == "minimal" else 19) * K))
+        regular = _font(("segoeui.ttf",), round(10.5 * K))
         label = tr(lang, {"charging": "charging", "full": "full"}.get(state, "device"))
-        dr.text((46 * k * S, h * S * 0.34), f"{pct}%", font=semibold, fill=self.FG, anchor="lm")
-        dr.text((46 * k * S, h * S * 0.76), label, font=regular, fill=self.DIM, anchor="lm")
+        text = f"{pct}%"
+        charging = state == "charging"
+
+        if style == "ring":
+            d, lw = 24 * K, max(2, round(3 * k)) * S
+            x0, y0 = 12 * K, (H - d) / 2
+            box = (x0, y0, x0 + d, y0 + d)
+            dr.ellipse(box, outline=pal["track"], width=int(lw))
+            cx, cy, r = x0 + d / 2, y0 + d / 2, d / 2 - lw / 2
+            if pct > 0:
+                end = -90 + 359.9 * min(pct, 100) / 100
+                dr.arc(box, start=-90, end=end, fill=color, width=int(lw))
+                for ang in (-90, end):  # extremos redondeados
+                    px, py = cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))
+                    dr.ellipse((px - lw / 2, py - lw / 2, px + lw / 2, py + lw / 2), fill=color)
+            if charging:
+                self._bolt(dr, cx, cy, K * 0.8, color)
+            dr.text((46 * K, H * 0.34), text, font=semibold, fill=pal["fg"], anchor="lm")
+            dr.text((46 * K, H * 0.76), label, font=regular, fill=pal["dim"], anchor="lm")
+
+        elif style == "battery":
+            bx, bwid, bhgt = 14 * K, 32 * K, 18 * K
+            by = (H - bhgt) / 2
+            dr.rounded_rectangle((bx, by, bx + bwid, by + bhgt), radius=4 * K,
+                                 outline=pal["dim"], width=int(2 * K))
+            dr.rounded_rectangle((bx + bwid + 1 * K, H / 2 - 4 * K, bx + bwid + 4 * K, H / 2 + 4 * K),
+                                 radius=1 * K, fill=pal["dim"])
+            ix0, iy0, ix1, iy1 = bx + 3.5 * K, by + 3.5 * K, bx + bwid - 3.5 * K, by + bhgt - 3.5 * K
+            fw = (ix1 - ix0) * min(pct, 100) / 100
+            if fw > 0:
+                dr.rounded_rectangle((ix0, iy0, ix0 + max(fw, 4 * K), iy1), radius=2 * K, fill=color)
+            if charging:
+                self._bolt(dr, bx + bwid / 2, H / 2, K * 0.7, pal["fg"], halo=pal["bg"])
+            dr.text((60 * K, H * 0.34), text, font=semibold, fill=pal["fg"], anchor="lm")
+            dr.text((60 * K, H * 0.76), label, font=regular, fill=pal["dim"], anchor="lm")
+
+        elif style == "bar":
+            dr.text((16 * K, H * 0.32), text, font=semibold, fill=pal["fg"], anchor="lm")
+            if charging:
+                self._bolt(dr, 16 * K + dr.textlength(text, font=semibold) + 12 * K, H * 0.32,
+                           K * 1.0, color)
+            dr.text((W - 16 * K, H * 0.32), label, font=regular, fill=pal["dim"], anchor="rm")
+            x0, x1, y0 = 16 * K, W - 16 * K, H * 0.64
+            dr.rounded_rectangle((x0, y0, x1, y0 + 8 * K), radius=4 * K, fill=pal["track"])
+            if pct > 0:
+                fx = x0 + max((x1 - x0) * min(pct, 100) / 100, 8 * K)
+                dr.rounded_rectangle((x0, y0, fx, y0 + 8 * K), radius=4 * K, fill=color)
+
+        else:  # minimal
+            if charging:
+                self._bolt(dr, 18 * K, H / 2, K * 1.1, color)
+            else:
+                dr.ellipse((13 * K, H / 2 - 5 * K, 23 * K, H / 2 + 5 * K), fill=color)
+            dr.text((34 * K, H / 2), text, font=semibold, fill=pal["fg"], anchor="lm")
+
         return img.resize((w, h), Image.LANCZOS)
 
     # ---------- ventana en capas ----------
@@ -184,8 +256,8 @@ class Popup:
         # layered | toolwindow | noactivate | transparent (los clics lo atraviesan)
         user32.SetWindowLongPtrW(self.hwnd, -20, ex | 0x80000 | 0x80 | 0x08000000 | 0x20)
 
-    def _position(self, w, h, margin, corner):
-        left, top, right, bottom = _work_area()
+    def _position(self, mon, w, h, margin, corner):
+        left, top, right, bottom = mon["work"]
         vert, horiz = corner.split("-")
         x = {"left": left + margin, "right": right - w - margin,
              "center": (left + right - w) // 2}[horiz]
@@ -195,14 +267,14 @@ class Popup:
     # ---------- API ----------
     def show(self, pct, state, cfg=None):
         cfg = cfg or config.load()
-        k = self.dpi * cfg["scale"]
-        w, h = round(self.W * k), round(self.H * k)
+        mon = monitors.pick(cfg["monitor"])
+        k = mon["dpi"] * cfg["scale"]
         if self.win is None:
             self._create()
-        color = "#34c759" if pct > 30 else ("#ffd60a" if pct > 15 else "#ff453a")
-        lang = config.resolve_language(cfg)
-        self._set_bitmap(self._render(w, h, k, pct, state, color, lang))
-        self.pos = self._position(w, h, round(self.MARGIN * k), cfg["corner"])
+        img = self._render(cfg, pct, state, k)
+        self._set_bitmap(img)
+        w, h = img.size
+        self.pos = self._position(mon, w, h, round(self.MARGIN * k), cfg["corner"])
         self.win.geometry(f"{w}x{h}+{self.pos[0]}+{self.pos[1]}")
         self.win.deiconify()
         self.win.update_idletasks()

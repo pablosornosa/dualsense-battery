@@ -10,7 +10,11 @@
 - Funciona por **USB y Bluetooth** (DualSense y DualSense Edge) / Works over **USB and Bluetooth**.
 - Popup minimalista con anillo de progreso, transparencia real y fundido suave / Minimal popup with progress ring, true transparency and fade.
 - Indica si está **cargando** o **completa** / Shows charging and full states.
-- Configurable: esquina, tamaño, duración, opacidad, idioma (es/en) / Configurable corner, size, duration, opacity, language.
+- **4 estilos** (anillo, barra, batería, mínimo) y **tema** oscuro, claro o igual que Windows / 4 styles and dark, light or system theme.
+- Color según el nivel (verde / amarillo / rojo) o **color fijo**; color propio **mientras carga** con un rayo ⚡ / Level-based or fixed color, plus a distinct charging color and bolt.
+- **Cuándo mostrarlo:** al pulsar PS, al conectar el mando, al empezar/terminar de cargar o al bajar de un umbral de batería baja / Choose when it appears: PS press, connect, charge start/finish, low battery.
+- Elige **esquina** y **monitor**; tamaño, duración y opacidad con slider **o escribiendo el valor** / Corner, monitor, and size/duration/opacity via slider or typed value.
+- Idioma es/en / Spanish and English UI.
 - Un solo `.exe`: configurador + instalador + programa en segundo plano / A single `.exe`: settings + installer + background app.
 - Instalación **por usuario**, sin administrador, sin registro ni tareas programadas / Per-user install, no admin, no registry, no scheduled tasks.
 - No roba el foco y los clics lo atraviesan, así que no molesta en los juegos en ventana / Never takes focus; clicks pass through.
@@ -52,6 +56,12 @@ Conecta el mando y pulsa el botón PS. Línea de comandos:
 | `--install` / `--uninstall` | Instala / desinstala sin interfaz |
 
 La configuración se guarda en `%APPDATA%\DualSenseBattery\config.json` y se aplica al siguiente popup, sin reiniciar.
+
+## Tests
+
+```powershell
+python -m unittest discover -s tests
+```
 
 ## Compilar el exe / Build
 
